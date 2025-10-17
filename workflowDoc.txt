@@ -1,0 +1,182 @@
+──────────────────────────────────────────────────────────────────────────────
+                    REAL-TIME AUDIO PROCESSING WORKFLOW
+──────────────────────────────────────────────────────────────────────────────
+
+┌─ HARDWARE LAYER: TIMER-BASED INTERRUPTS ──────────────────────────────────┐
+│                                                                           │
+│  [TC0 @ 8kHz]  ✓                                 [TC1 @ 8kHz]  ✓           │
+│  ISR: TC0_Handler()                             ISR: TC1_Handler()         │
+│  (ADC Input)                                    (DAC Output)               │
+│  │                                              │                          │
+│  ├─→ Reads ONE ADC sample from microphone       ├─→ Writes ONE DAC sample  │
+│  │   analogRead(A0) → 12-bit value              │   analogWrite(DAC0, val) │
+│  │                                              │                          │
+│  ├─→ Ping-Pong Buffer Switch:                   ├─→ Output from dacBuffer: │
+│  │   if (useBufferA)                            │   if (dacBufferReady &&  │
+│  │     adcBufferA[adcIndex++] = sample              dacIndex < SAMPLES)    │
+│  │   else                                       │     analogWrite(...)     │
+│  │     adcBufferB[adcIndex++] = sample          │     dacIndex++           │
+│  │                                              │                          │
+│  ├─→ When one buffer FULL (adcIndex==256):      │                          │
+│  │   • Set adcBufferReady = true                │   [RUNS EVERY 125 µs]    │
+│  │   • Toggle useBufferA                        │                          │
+│  │   • Reset adcIndex = 0                       │                          │
+│  │   • ISR resumes filling OTHER buffer         │                          │
+│  │                                              │                          │
+│  │   [RUNS EVERY 125 µs] ────────────────────→  │                          │
+│  │   [One full buffer = 256 samples = 32 ms]    │                          │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+┌─ SOFTWARE LAYER: MAIN PROCESSING LOOP (loop() function) ──────────────────┐
+│                                                                            │
+│  STEP 1: WAIT FOR BUFFER READY                                             │
+│  ───────────────────────────────────────────────────────────────           │
+│  if (adcBufferReady == false)                                              │
+│    → Sleep/yield, check again                                              │
+│                                                                            │
+│  ✓ Buffer is ready! (every 32 ms)                                          │
+│                                                                            │
+│                                                                            │
+│  STEP 2: SAFELY READ INACTIVE BUFFER (No race conditions)                  │
+│  ───────────────────────────────────────────────────────────────           │
+│  noInterrupts();                                                           │
+│    if (useBufferA == true)                                                 │
+│      → Copy adcBufferB to workingBuffer[]  ← ISR filling A, safe to read B │
+│    else                                                                    │
+│      → Copy adcBufferA to workingBuffer[]  ← ISR filling B, safe to read A │
+│    adcBufferReady = false;                                                 │
+│  interrupts();                                                             │ 
+│                                                                            │
+│                                                                            │
+│  STEP 3: PREPROCESSING                                                     │
+│  ───────────────────────────────────────────────────────────────           │
+│  ├─ Convert uint16_t → double (12-bit ADC values)                          │
+│  ├─ Remove DC bias: subtract mean of all samples                           │
+│  └─ Result: centered audio signal with mean ≈ 0                            │
+│                                                                            │
+│                                                                            │
+│  STEP 4: FFT ANALYSIS                                                      │
+│  ───────────────────────────────────────────────────────────────           │
+│  ├─ Apply Hamming window to vReal[256]                                    │
+│  │  (reduces spectral leakage)                                            │
+│  │                                                                        │
+│  ├─ Compute FFT: magnitude + phase spectrum                               │
+│  │  for (i=0 to 128) {                                                    │
+│  │    mag = sqrt(vReal[i]² + vImag[i]²)                                   │
+│  │    phase = atan2(vImag[i], vReal[i])                                   │
+│  │  }                                                                     │
+│  │                                                                        │
+│  └─ Result: Frequency-domain representation (0–4 kHz)                     │
+│                                                                           │
+│                                                                           │
+│  STEP 5: SPECTRAL SUBTRACTION (NOISE SUPPRESSION)                         │
+│  ───────────────────────────────────────────────────────────────          │
+│  for each frequency bin:                                                  │
+│    newMag = mag - noiseMag[i]                                             │
+│    if (newMag < SPECTRAL_FLOOR × mag)                                     │
+│      newMag = SPECTRAL_FLOOR × mag      ← Prevent over-subtraction        │
+│    vReal[i] = newMag × cos(phase)       ← Reconstruct with original phase │
+│    vImag[i] = newMag × sin(phase)                                         │
+│                                                                           │
+│                                                                           │
+│  STEP 6: IFFT SYNTHESIS                                                   │
+│  ───────────────────────────────────────────────────────────────          │
+│  ├─ Inverse FFT: spectrum → time-domain output                            │
+│  └─ Result: vReal[256] = denoised audio samples                           │
+│                                                                           │
+│                                                                           │
+│  STEP 7: OVERLAP-ADD (Smooth frame transitions)                           │
+│  ───────────────────────────────────────────────────────────────          │
+│  for (i=0 to 128):                                                        │
+│    outputBuffer[i] = vReal[i] + overlap[i]                                │
+│  for (i=128 to 256):                                                      │
+│    outputBuffer[i] = vReal[i]                                             │
+│  for (i=0 to 128):                                                        │
+│    overlap[i] = vReal[128 + i]        ← Save tail for next frame          │
+│                                                                           │
+│  Why? Prevents clicks/pops at frame boundaries                            │
+│                                                                           │
+│                                                                           │
+│  STEP 8: DYNAMIC NORMALIZATION                                            │
+│  ───────────────────────────────────────────────────────────────          │
+│  ├─ Find min/max in outputBuffer[]                                        │
+│  ├─ Scale to 12-bit DAC range (0–4095)                                    │
+│  │  dacValue[i] = (outputBuffer[i] - minVal) / range × 4095               │
+│  └─ Handle edge case: if range ≈ 0, clamp to MIN_RANGE_THRESHOLD          │
+│                                                                           │
+│                                                                           │
+│  STEP 9: HAND OFF TO DAC ISR (Thread-safe)                                │
+│  ───────────────────────────────────────────────────────────────          │
+│  noInterrupts();                                                          │
+│    Copy scaled samples → dacBuffer[256]                                   │
+│    dacIndex = 0                    ← Signal DAC ISR to start playback     │
+│    dacBufferReady = true                                                  │
+│  interrupts();                                                            │
+│                                                                           │
+│  TC1 ISR now sends one sample every 125 µs (@ 8 kHz)                      │
+│                                                                           │
+│                                                                           │
+│  STEP 10: PERFORMANCE MONITORING                                          │
+│  ───────────────────────────────────────────────────────────────          │
+│  ├─ Measure elapsed time for entire process                               │
+│  ├─ Alert if processing > 50 ms (not enough headroom before next buffer)  │
+│  └─ Log diagnostic info every 5 seconds                                   │
+│                                                                           │
+│  ⏱  Total cycle time: ~32 ms (one full buffer)                              
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+┌─ TIMING & BUFFER STATES ───────────────────────────────────────────────────┐
+│                                                                               │
+│  Time →  0 ms      8 ms     16 ms     24 ms     32 ms     40 ms     48 ms     │
+│  ─────────────────────────────────────────────────────────────────────────    │
+│                                                                               │
+│  ADC:     [Buffer A filling (256 samples)........][Buffer B filling..........]│
+│           useBufferA=true → false (@ 32ms)      useBufferA=false → true       │
+│           ↑                                      ↑                            │
+│           adcBufferReady=true (ISR sets it)     adcBufferReady=true           │
+│                                                                               │
+│  Main:    [Wait] [Process B] [Output B] [Wait] [Process A] [Output A]  ...    │
+│                   ↑                              ↑                            │
+│                   Copy 256 samples              Copy 256 samples              │
+│                   (noInterrupts() for safety)  (noInterrupts() for safety)    │
+│                   FFT + Denoise                 FFT + Denoise                 │
+│                   ~15-20 ms work                ~15-20 ms work                │
+│                   (Must complete by ms 32!)     (Must complete by ms 64!)     │
+│                                                                               │
+│  DAC:                  [Playing B].......       [Playing A].......            │
+│                        dacIndex: 0→256         dacIndex: 0→256                │
+│                        One sample every 125 µs  One sample every 125 µs       │
+│                        (Triggered by TC1 ISR)   (Triggered by TC1 ISR)        │
+│                                                                               │
+│  Key:    ISR runs EVERY 125 µs (8000 times/sec)                               │
+│          One full buffer = 256 samples = 32 ms of audio                       │
+│          Processing budget: <32 ms per buffer (you have ~50 ms headroom)      │
+│                                                                               │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+KEY INSIGHTS :
+────────────────────────────────────────────────────────────────────────────
+
+1. PING-PONG BUFFERING
+   While ISR fills Buffer A, main loop processes Buffer B
+   → Prevents data corruption, zero-copy during handoff
+
+2. INTERRUPT SAFETY
+   Critical sections protected with noInterrupts()/interrupts()
+   Only 2 lines of actual copy work in ISRs (fast!)
+
+3. SPECTRAL FLOOR
+   Prevents "musical noise" (birdies) from over-aggressive subtraction
+   Trade-off: Keep some noise to avoid artifacts
+
+4. OVERLAP-ADD
+   Hamming window causes windowing artifacts → need 50% overlap
+   Smooth transitions = no clicks/pops in output
+
+5. LATENCY BUDGET
+   Input buffer: 32 ms
+   Processing: 15-20 ms
+   Output buffer: 32 ms (staggered)
+   → Total perceptual latency ≈ 40-50 ms (acceptable for audio)

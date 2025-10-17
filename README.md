@@ -2,8 +2,6 @@
 
 A high-performance embedded audio processing system for real-time noise reduction using spectral subtraction on Arduino Due. This project demonstrates advanced signal processing, hardware-software integration, and real-time embedded systems design.
 
-**Status:** ✅ Fully functional | **License:** MIT | **Platform:** Arduino Due
-
 ---
 
 ## Overview

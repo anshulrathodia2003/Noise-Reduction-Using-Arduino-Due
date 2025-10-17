@@ -35,9 +35,9 @@ DAC (DAC0, 12-bit) ← [TC1 ISR @ 8 kHz] ← Processed Audio Buffer
 ### Software Pipeline
 ```
 Input Buffer → DC Bias Removal → Hamming Window → FFT Analysis
-    ↓
+                                                    ↓
 Spectral Subtraction (Noise Profile Subtraction with Floor)
-    ↓
+   ↓
 Inverse FFT → Overlap-Add → Dynamic Normalization → Output Buffer
 ```
 
@@ -160,7 +160,7 @@ Arduino Due Connections:
 
 ### Upload Code
 1. Connect Arduino Due to computer via USB (Programming Port)
-2. Open `audio_denoise.ino` in Arduino IDE
+2. Open `NoiseReductionMain.ino` in Arduino IDE
 3. Click **Upload** (Ctrl+U)
 4. Open **Serial Monitor** (115200 baud) to see diagnostics
 
@@ -226,34 +226,6 @@ Press the **RESET** button on Arduino Due to restart noise profile estimation.
 
 ---
 
-## Performance Metrics
-
-### Real-Time Performance
-| Metric | Value | Notes |
-|--------|-------|-------|
-| Sampling Rate | 8 kHz | ±0.001% jitter (hardware timer) |
-| Frame Duration | 32 ms | 256 samples @ 8 kHz |
-| Processing Time | 15–20 ms | Leaves 30+ ms headroom |
-| Output Latency | 40–50 ms | Input to audible output |
-| CPU Utilization | ~40% | Single-core ARM Cortex-M3 |
-
-### Audio Quality
-| Metric | Value |
-|--------|-------|
-| Frequency Range | 100 Hz – 4 kHz (aliasing-free) |
-| Effective SNR Improvement | ~10–15 dB (depends on noise type) |
-| THD | <1% (quantization + windowing) |
-| Artifacts | Musical noise minimized via spectral floor |
-
-### Memory Usage
-| Resource | Usage |
-|----------|-------|
-| SRAM | ~4.5 kB (buffers + FFT workspace) |
-| Flash | ~35 kB (code + arduinoFFT library) |
-| Available | ~96 kB SRAM / ~256 kB Flash (plenty) |
-
----
-
 ## Troubleshooting
 
 ### No Audio Output
@@ -284,25 +256,6 @@ Press the **RESET** button on Arduino Due to restart noise profile estimation.
 
 ---
 
-## Project Structure
-
-```
-audio-denoise/
-├── audio_denoise.ino          # Main firmware
-├── README.md                  # This file
-├── HARDWARE.md                # Detailed hardware guide
-├── docs/
-│   ├── architecture.md        # System design document
-│   ├── signal_processing.md   # DSP theory & algorithms
-│   └── performance_analysis.md
-└── examples/
-    ├── noise_profile_test.ino
-    ├── dac_output_test.ino
-    └── frequency_sweep_test.ino
-```
-
----
-
 ## Implementation Notes
 
 ### Why Spectral Subtraction?
@@ -330,44 +283,13 @@ audio-denoise/
 - [ ] **Adaptive Noise Profile:** Online learning during playback
 - [ ] **Multi-rate Processing:** 16 kHz for broader frequency range
 - [ ] **Web Dashboard:** Real-time frequency plot via Ethernet shield
-- [ ] **MEMS Microphone:** Integrated dual-mic array for directionality
-
----
-
-## References
-
-### Academic
-- *Spectral Subtraction for Speech Enhancement* - Boll (1979)
-- *Noise Reduction in Speech Processing* - IEEE DSP Magazine
-- IEEE 802.11 Audio Processing Standards
-
-### Libraries & Tools
-- [arduinoFFT Documentation](https://github.com/kosme/arduinoFFT)
-- [Arduino Due Reference](https://www.arduino.cc/en/Reference/ArduinoDue)
-- [ARM CMSIS-DSP](https://developer.arm.com/tools-and-software/embedded/cmsis)
-
-### Related Projects
-- [Teensy Audio System](https://www.pjrc.com/teensy/audio.html) (higher-end alternative)
-- [STM32 Audio DSP](https://github.com/STMicroelectronics/STM32CubeH7) (ARM alternative)
-
----
-
-## Contributing
-
-Contributions welcome! Areas of interest:
-- Performance optimizations (fixed-point FFT, ARM NEON)
-- Additional noise suppression algorithms
-- Hardware variations (different microcontrollers, sensors)
-- Documentation improvements
-
-Please open an **Issue** for bug reports or **Pull Request** for enhancements.
 
 ---
 
 ## Authors
 
-- **Your Name** - Initial implementation, signal processing design
-- BTech Final Year Project, [Your Institution]
+- **Anshul Rathodia and Angela Singhal** - Initial implementation, EE301N Microprocessors and Digital Systems Design
+- BTech 5th Sem Course Project, [IIT INDORE]
 
 ---
 
